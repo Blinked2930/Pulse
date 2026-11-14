@@ -162,9 +162,9 @@ function isSpent(e: ExpenseRecord): boolean {
 type FlowPolarity = 'positive' | 'negative' | 'neutral';
 
 interface AccountingSignals {
-  expense: FlowPolarity; // red = expense incurred, green = income/reversal, gray = neutral
-  cash: FlowPolarity; // green = cash in, red = cash out, gray = neutral
-  bank: FlowPolarity; // green = bank in, red = bank out, gray = neutral
+  expense: FlowPolarity;
+  cash: FlowPolarity;
+  bank: FlowPolarity;
   summary: string;
 }
 
@@ -565,6 +565,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 Math.abs(expense.budgetAmountALL - expense.amountInALL) >= 1;
 
               const kindLabel = NON_STANDARD_LABELS[kind];
+              const showSubtitleCategory = !kindLabel && Boolean(expense.itemName);
 
               return (
                 <div
@@ -616,13 +617,21 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                             <span>·</span>
                           </>
                         )}
+                        {showSubtitleCategory && (
+                          <>
+                            <span className="font-medium text-slate-500 truncate">
+                              {canonicalCategory}
+                            </span>
+                            <span>·</span>
+                          </>
+                        )}
                         {showsBudgetShare && (
                           <>
                             <span className="text-indigo-600 font-medium">Split</span>
                             <span>·</span>
                           </>
                         )}
-                        <span>{formatRelativeTime(expense.timestamp)}</span>
+                        <span className="shrink-0">{formatRelativeTime(expense.timestamp)}</span>
                         {!expense.isSynced && (
                           <span title="Offline" className="inline-flex shrink-0">
                             <Clock className="w-3 h-3 text-slate-400" />
