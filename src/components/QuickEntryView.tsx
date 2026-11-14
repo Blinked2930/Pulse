@@ -304,7 +304,6 @@ export const QuickEntryView: React.FC = () => {
     };
   }, []);
 
-  // Query details of selected Divvy groups to extract member names
   const splitGroupDetails = useQuery(
     (api as any).groups?.getGroupDetails,
     splitSyncGroupId ? { groupId: splitSyncGroupId } : 'skip'
@@ -1223,10 +1222,10 @@ export const QuickEntryView: React.FC = () => {
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
-                        <label className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">
+                        <label className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider leading-tight min-w-0">
                           Their Owed Share:
                         </label>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <input
                             type="number"
                             inputMode="decimal"
@@ -1234,7 +1233,7 @@ export const QuickEntryView: React.FC = () => {
                             value={friendShareStr}
                             onChange={(e) => setFriendShareStr(e.target.value)}
                             placeholder="0"
-                            className="w-28 bg-white border border-indigo-200 rounded-xl px-3 py-1.5 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                            className="w-24 sm:w-28 bg-white border border-indigo-200 rounded-xl px-2.5 py-1.5 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
                           />
                           <span className="text-xs font-bold text-indigo-700">{defaultAppCurrency}</span>
                         </div>
@@ -1324,10 +1323,10 @@ export const QuickEntryView: React.FC = () => {
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <label className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">
+                    <label className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider leading-tight min-w-0">
                       Your Personal Share (You Owe):
                     </label>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <input
                         type="number"
                         inputMode="decimal"
@@ -1335,7 +1334,7 @@ export const QuickEntryView: React.FC = () => {
                         value={shareAmountStr}
                         onChange={(e) => setShareAmountStr(e.target.value)}
                         placeholder={parsedAmount > 0 ? String(parsedAmount) : '0'}
-                        className="w-28 bg-white border border-indigo-200 rounded-xl px-3 py-1.5 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                        className="w-24 sm:w-28 bg-white border border-indigo-200 rounded-xl px-2.5 py-1.5 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
                       />
                       <span className="text-xs font-bold text-indigo-700">{defaultAppCurrency}</span>
                     </div>
