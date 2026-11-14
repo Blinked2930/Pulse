@@ -45,13 +45,29 @@ export function useBudgetCycle() {
             user?.fullName ?? '',
             user?.firstName ?? '',
             user?.username ?? '',
+            'You',
+            'Me',
         ].filter(Boolean);
+
+        // Normalize member records so legacy "anonymous" creator records match the signed-in user
+        const normalizedDetails: BridgeGroupDetails[] = allGroupDetails.map((gd) => {
+            const hasExactUser = user?.id && gd.members.some((m: any) => m.userId === user.id);
+            if (hasExactUser || !user?.id) return gd;
+            const anonIdx = gd.members.findIndex((m: any) => !m.userId || m.userId === 'anonymous');
+            if (anonIdx === -1) return gd;
+            return {
+                ...gd,
+                members: gd.members.map((m: any, idx: number) =>
+                    idx === anonIdx ? { ...m, userId: user.id } : m
+                ),
+            };
+        });
 
         return buildCycleRollup({
             groupSummaries: myGroups,
-            groupDetailsList: allGroupDetails,
+            groupDetailsList: normalizedDetails,
             cycleStartMs: Number.isFinite(cycleStartMs) ? cycleStartMs : 0,
-            clerkUserId: user?.id ?? null,
+            clerkUserId: user?.id ?? 'anonymous',
             displayNames,
         });
     }, [cycle, myGroups, allGroupDetails, user?.id, user?.fullName, user?.firstName, user?.username]);

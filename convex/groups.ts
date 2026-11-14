@@ -185,12 +185,16 @@ export const getMyGroups = query({
 
     const allMembers = await ctx.db.query("groupMembers").collect();
     const myMemberRecords = allMembers.filter(
-      (m) => m.userId === userId || (!m.userId && userId === "anonymous")
+      (m) => m.userId === userId || !m.userId || m.userId === "anonymous"
     );
 
     const groups: any[] = [];
+    const seenGroupIds = new Set<string>();
 
     for (const memberRow of myMemberRecords) {
+      const gidStr = String(memberRow.groupId);
+      if (seenGroupIds.has(gidStr)) continue;
+
       const group = await ctx.db.get(memberRow.groupId);
       if (!group || group.deleted) continue;
 
@@ -201,6 +205,13 @@ export const getMyGroups = query({
         .query("groupMembers")
         .filter((q) => q.eq(q.field("groupId"), memberRow.groupId))
         .collect();
+
+      const selfMember =
+        members.find((m) => m.userId === userId) ??
+        members.find((m) => !m.userId || m.userId === "anonymous");
+      if (!selfMember) continue;
+
+      seenGroupIds.add(gidStr);
 
       const expenses = await ctx.db
         .query("groupExpenses")
@@ -234,12 +245,12 @@ export const getMyGroups = query({
           exp.amountInGroupCurrency
         );
 
-        if (exp.paidByMemberId === memberRow._id) {
+        if (exp.paidByMemberId === selfMember._id) {
           netALL += exp.amountInALL;
           netGroup += expGroupTotal;
         }
         for (const split of exp.splits) {
-          if (split.memberId === memberRow._id) {
+          if (split.memberId === selfMember._id) {
             netALL -= split.amountALL;
             const splitGroupAmt =
               exp.currency === group.currency && exp.amountInALL > 0
@@ -266,11 +277,11 @@ export const getMyGroups = query({
           set.amountInGroupCurrency
         );
 
-        if (set.fromMemberId === memberRow._id) {
+        if (set.fromMemberId === selfMember._id) {
           netALL += set.amountALL;
           netGroup += setGroupAmt;
         }
-        if (set.toMemberId === memberRow._id) {
+        if (set.toMemberId === selfMember._id) {
           netALL -= set.amountALL;
           netGroup -= setGroupAmt;
         }
@@ -357,7 +368,7 @@ export const getAllMyGroupDetails = query({
 
     const allMembers = await ctx.db.query("groupMembers").collect();
     const myMemberRecords = allMembers.filter(
-      (m) => m.userId === userId || (!m.userId && userId === "anonymous")
+      (m) => m.userId === userId || !m.userId || m.userId === "anonymous"
     );
 
     const results: Array<{
@@ -511,10 +522,10 @@ export const getActivityFeed = query({
 
     const allMembers = await ctx.db.query("groupMembers").collect();
     const memberRecords = allMembers.filter(
-      (m) => m.userId === userId || (!m.userId && userId === "anonymous")
+      (m) => m.userId === userId || !m.userId || m.userId === "anonymous"
     );
 
-    const groupIds = memberRecords.map((m) => m.groupId);
+    const groupIds = Array.from(new Set(memberRecords.map((m) => m.groupId)));
 
     const activities: Array<{
       id: string;
@@ -548,9 +559,9 @@ export const getActivityFeed = query({
         .filter((q) => q.eq(q.field("groupId"), groupId))
         .collect();
 
-      const selfMember = members.find(
-        (m) => m.userId === userId || (!m.userId && userId === "anonymous")
-      );
+      const selfMember =
+        members.find((m) => m.userId === userId) ??
+        members.find((m) => !m.userId || m.userId === "anonymous");
       const memberMap = new Map(members.map((m) => [m._id, m.name]));
 
       const expenses = await ctx.db

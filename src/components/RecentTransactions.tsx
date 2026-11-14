@@ -325,23 +325,28 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
       .filter((t) => !t.deleted)
       .map((t) => ({ kind: 'transfer' as const, record: t, timestamp: t.timestamp }));
 
-    const remoteExpenses: MergedItem[] = convexActivity.map((a: any) => ({
-      kind: 'expense' as const,
-      isConvex: true,
-      groupName: a.groupName,
-      timestamp: new Date(a.timestamp).toISOString(),
-      record: {
-        id: a.id || a._id,
-        amount: a.amount,
-        amountInALL: a.amountInALL ?? a.amount,
-        currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
-        category: normalizeCategory(a.category),
-        itemName: `${a.groupName}: ${a.title}`,
-        paidWith: a.paidWith || 'Card',
+    const remoteExpenses: MergedItem[] = convexActivity
+      .filter((a: any) => a.type !== 'settlement' && a.syncToPulse !== false)
+      .map((a: any) => ({
+        kind: 'expense' as const,
+        isConvex: true,
+        groupName: a.groupName,
         timestamp: new Date(a.timestamp).toISOString(),
-        isSynced: true,
-      } as ExpenseRecord,
-    }));
+        record: {
+          id: a.id || a._id,
+          amount: a.amount,
+          amountInALL: a.amountInALL ?? a.amount,
+          budgetAmountALL: typeof a.myShareALL === 'number' ? a.myShareALL : undefined,
+          currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
+          category: normalizeCategory(a.category),
+          itemName: `${a.groupName}: ${a.title}`,
+          paidWith: a.paidWith || 'Card',
+          walletNeutral: a.youPaid === false,
+          isBigExpense: Boolean(a.isBigExpense),
+          timestamp: new Date(a.timestamp).toISOString(),
+          isSynced: true,
+        } as ExpenseRecord,
+      }));
 
     return [...localExpenses, ...localTransfers, ...remoteExpenses].sort((a, b) =>
       a.timestamp < b.timestamp ? 1 : -1
