@@ -110,18 +110,6 @@ type PrimaryKind =
   | 'income'
   | 'reconciliation';
 
-const NON_STANDARD_LABELS: Partial<Record<PrimaryKind, string>> = {
-  gift: 'Gift',
-  lent: 'Lent out',
-  borrowed: 'Borrowed',
-  repaid_to_me: 'Repaid to me',
-  i_repaid: 'I repaid',
-  offset: 'Offset',
-  big: 'Big expense',
-  income: 'Income',
-  reconciliation: 'Reconciliation',
-};
-
 function primaryKind(e: ExpenseRecord): PrimaryKind {
   const name = (e.itemName ?? '').trim();
   const lowerName = name.toLowerCase();
@@ -144,8 +132,7 @@ function primaryKind(e: ExpenseRecord): PrimaryKind {
   if (
     e.isForgiveness ||
     lowerName.includes('gift to') ||
-    lowerName.includes('forgiven to') ||
-    lowerName.includes('bought by')
+    lowerName.includes('forgiven to')
   ) {
     return 'gift';
   }
@@ -453,7 +440,6 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                         <p className="text-xs font-semibold text-slate-900 truncate">{label}</p>
                         <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400">
                           <AccountingStrip signals={transferSignals} />
-                          <span className="font-medium text-amber-700">Transfer</span>
                           <span>·</span>
                           <span>{formatRelativeTime(t.timestamp)}</span>
                           {!t.isSynced && (
@@ -495,7 +481,6 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
               const noWallet = Boolean(expense.walletNeutral);
               const spent = isSpent(expense);
               const isIn = expense.amount < 0;
-              const isBudgetNeutral = !spent && kind !== 'income';
               const signals = getExpenseSignals(expense, kind, spent);
 
               const moneyKinds: PrimaryKind[] = [
@@ -564,9 +549,6 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 expense.budgetAmountALL !== undefined &&
                 Math.abs(expense.budgetAmountALL - expense.amountInALL) >= 1;
 
-              const kindLabel = NON_STANDARD_LABELS[kind];
-              const showSubtitleCategory = !kindLabel && Boolean(expense.itemName);
-
               return (
                 <div
                   key={expense.id}
@@ -598,39 +580,9 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400 truncate">
+                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400">
                         <AccountingStrip signals={signals} />
-                        {kindLabel && (
-                          <>
-                            <span
-                              className={cn(
-                                'font-semibold',
-                                isBudgetNeutral
-                                  ? 'text-indigo-600'
-                                  : kind === 'income'
-                                    ? 'text-emerald-600'
-                                    : 'text-slate-600'
-                              )}
-                            >
-                              {kindLabel}
-                            </span>
-                            <span>·</span>
-                          </>
-                        )}
-                        {showSubtitleCategory && (
-                          <>
-                            <span className="font-medium text-slate-500 truncate">
-                              {canonicalCategory}
-                            </span>
-                            <span>·</span>
-                          </>
-                        )}
-                        {showsBudgetShare && (
-                          <>
-                            <span className="text-indigo-600 font-medium">Split</span>
-                            <span>·</span>
-                          </>
-                        )}
+                        <span>·</span>
                         <span className="shrink-0">{formatRelativeTime(expense.timestamp)}</span>
                         {!expense.isSynced && (
                           <span title="Offline" className="inline-flex shrink-0">
