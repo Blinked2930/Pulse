@@ -17,6 +17,7 @@ import {
   Plane,
   Users,
   MoreHorizontal,
+  Receipt,
   Banknote,
   CreditCard,
   ArrowLeftRight,
@@ -25,12 +26,11 @@ import {
   TriangleAlert,
   ChevronDown,
   Scale,
-  Receipt,
+  Gift,
 } from 'lucide-react';
 import type { ExpenseRecord, Category, TransferRecord } from '../types';
 import { deleteExpense, deleteTransfer, hasLinkedDebt } from '../db';
 import { useCurrency } from '../hooks/useCurrency';
-import { formatCurrency as formatRawCurrency } from '../utils/currency';
 import { classifyExpense, budgetImpactOf, isReconciliationEntry } from '../utils/budget';
 import { normalizeCategory } from '../utils/categoryConfig';
 import { cn } from '../utils/cn';
@@ -139,72 +139,16 @@ function primaryKind(e: ExpenseRecord): PrimaryKind {
 const SPENT_BUCKETS = new Set(['regular', 'noWalletSpending', 'forgiveness', 'travel', 'big']);
 
 function isSpent(e: ExpenseRecord): boolean {
-  return e.amount > 0 && SPENT_BUCKETS.has(classifyExpense(e)) && budgetImpactOf(e) > 0;
+  return budgetImpactOf(e) > 0 && SPENT_BUCKETS.has(classifyExpense(e));
 }
 
-type FlowPolarity = 'positive' | 'negative' | 'neutral';
+type AccountingState = 'inflow' | 'outflow' | 'neutral';
 
-interface AccountingSignals {
-  expense: FlowPolarity; // green = income/refund, red = expense incurred, gray = neutral
-  cash: FlowPolarity;    // green = cash in, red = cash out, gray = neutral
-  bank: FlowPolarity;    // green = bank in, red = bank out, gray = neutral
-  summary: string;
+function iconStateClass(state: AccountingState): string {
+  if (state === 'inflow') return 'text-emerald-600';
+  if (state === 'outflow') return 'text-rose-600';
+  return 'text-slate-300';
 }
-
-function getExpenseSignals(e: ExpenseRecord, kind: PrimaryKind, spent: boolean): AccountingSignals {
-  const noWallet = Boolean(e.walletNeutral);
-  const isCash = e.paidWith === 'Cash';
-  const isInflow = e.amount < 0;
-  const impact = budgetImpactOf(e);
-  const bucket = classifyExpense(e);
-
-  let expensePolarity: FlowPolarity = 'neutral';
-  if (spent && impact > 0) {
-    expensePolarity = 'negative';
-  } else if (
-    kind === 'income' ||
-    (isInflow && !e.debtRelated && !e.isDebtOrigin && kind !== 'reconciliation' && kind !== 'offset') ||
-    (SPENT_BUCKETS.has(bucket) && impact < 0)
-  ) {
-    expensePolarity = 'positive';
-  }
-
-  let cashPolarity: FlowPolarity = 'neutral';
-  let bankPolarity: FlowPolarity = 'neutral';
-  if (!noWallet && e.amount !== 0) {
-    const walletPolarity: FlowPolarity = isInflow ? 'positive' : 'negative';
-    if (isCash) {
-      cashPolarity = walletPolarity;
-    } else {
-      bankPolarity = walletPolarity;
-    }
-  }
-
-  const label = (p: FlowPolarity, pos: string, neg: string) =>
-    p === 'positive' ? pos : p === 'negative' ? neg : 'neutral';
-
-  const summary = `Expenses: ${label(expensePolarity, '+positive', '−negative')} · Cash: ${label(
-    cashPolarity,
-    '+in',
-    '−out'
-  )} · Bank: ${label(bankPolarity, '+in', '−out')}`;
-
-  return { expense: expensePolarity, cash: cashPolarity, bank: bankPolarity, summary };
-}
-
-const signalColor = (p: FlowPolarity): string =>
-  p === 'positive' ? 'text-emerald-600' : p === 'negative' ? 'text-rose-500' : 'text-slate-300';
-
-const AccountingStrip: React.FC<{ signals: AccountingSignals }> = ({ signals }) => (
-  <span
-    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 border border-slate-200/70 shrink-0"
-    title={signals.summary}
-  >
-    <Receipt className={cn('w-3 h-3', signalColor(signals.expense))} />
-    <Banknote className={cn('w-3 h-3', signalColor(signals.cash))} />
-    <CreditCard className={cn('w-3 h-3', signalColor(signals.bank))} />
-  </span>
-);
 
 type MergedItem =
   | { kind: 'expense'; record: ExpenseRecord; timestamp: string; isConvex?: boolean; groupName?: string }
@@ -276,7 +220,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
 }) => {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const { format, currency: activeCurrency } = useCurrency();
+  const { format } = useCurrency();
 
   const convexActivity = useQuery((api as any).groups?.getActivityFeed, {}) || [];
 
@@ -327,26 +271,59 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
       .filter((t) => !t.deleted)
       .map((t) => ({ kind: 'transfer' as const, record: t, timestamp: t.timestamp }));
 
-    const remoteExpenses: MergedItem[] = convexActivity.map((a: any) => ({
-      kind: 'expense' as const,
-      isConvex: true,
-      groupName: a.groupName,
-      timestamp: new Date(a.timestamp).toISOString(),
-      record: {
-        id: a.id || a._id,
-        amount: a.amount,
-        amountInALL: a.amountInALL ?? a.amount,
-        budgetAmountALL: typeof a.myShareALL === 'number' ? a.myShareALL : undefined,
-        currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
-        category: normalizeCategory(a.category),
-        itemName: a.title || `${a.groupName}`,
-        paidWith: a.paidWith || 'Card',
-        walletNeutral: a.youPaid === false,
-        isBigExpense: Boolean(a.isBigExpense),
-        timestamp: new Date(a.timestamp).toISOString(),
-        isSynced: true,
-      } as ExpenseRecord,
-    }));
+    const remoteExpenses: MergedItem[] = convexActivity
+      .filter((a: any) => {
+        if (a.type === 'settlement') return a.involvesYou !== false;
+        return a.syncToPulse !== false;
+      })
+      .map((a: any) => {
+        if (a.type === 'settlement') {
+          const isIncoming = Boolean(a.youReceived);
+          const rawNative = Math.abs(a.amount ?? 0);
+          const rawALL = Math.abs(a.amountInALL ?? a.amount ?? 0);
+          return {
+            kind: 'expense' as const,
+            isConvex: true,
+            groupName: a.groupName,
+            timestamp: new Date(a.timestamp).toISOString(),
+            record: {
+              id: a.id || a._id,
+              amount: isIncoming ? -rawNative : rawNative,
+              amountInALL: isIncoming ? -rawALL : rawALL,
+              budgetAmountALL: 0,
+              currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
+              category: 'Other',
+              itemName: `${a.groupName}: ${a.title}`,
+              paidWith: a.paidWith || 'Card',
+              debtRelated: true,
+              walletNeutral: a.involvesYou === false,
+              timestamp: new Date(a.timestamp).toISOString(),
+              isSynced: true,
+            } as ExpenseRecord,
+          };
+        }
+
+        return {
+          kind: 'expense' as const,
+          isConvex: true,
+          groupName: a.groupName,
+          timestamp: new Date(a.timestamp).toISOString(),
+          record: {
+            id: a.id || a._id,
+            amount: a.amount,
+            amountInALL: a.amountInALL ?? a.amount,
+            budgetAmountALL: typeof a.myShareALL === 'number' ? a.myShareALL : undefined,
+            currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
+            category: normalizeCategory(a.category),
+            itemName: `${a.groupName}: ${a.title}`,
+            paidWith: a.paidWith || 'Card',
+            walletNeutral: a.youPaid === false,
+            isBigExpense: Boolean(a.isBigExpense),
+            timestamp: new Date(a.timestamp).toISOString(),
+            isSynced: true,
+          } as ExpenseRecord,
+        };
+      });
 
     return [...localExpenses, ...localTransfers, ...remoteExpenses].sort((a, b) =>
       a.timestamp < b.timestamp ? 1 : -1
@@ -420,53 +397,45 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 const t = item.record;
                 const isBankToCash = t.direction === 'BankToCash';
                 const label = isBankToCash ? 'Bank → Cash' : 'Cash → Bank';
-                const transferSignals: AccountingSignals = {
-                  expense: 'neutral',
-                  cash: isBankToCash ? 'positive' : 'negative',
-                  bank: isBankToCash ? 'negative' : 'positive',
-                  summary: isBankToCash
-                    ? 'Expenses: neutral · Cash: +in · Bank: −out'
-                    : 'Expenses: neutral · Cash: −out · Bank: +in',
-                };
+                const cashState: AccountingState = isBankToCash ? 'inflow' : 'outflow';
+                const bankState: AccountingState = isBankToCash ? 'outflow' : 'inflow';
 
                 return (
                   <div
                     key={t.id}
-                    className="flex items-center justify-between px-3 py-2.5 rounded-2xl bg-white border border-slate-200 transition-all shadow-sm"
+                    className="flex items-center justify-between p-3 rounded-2xl bg-white border border-slate-200 transition-all shadow-sm"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className="w-9 h-9 rounded-xl bg-amber-50/70 border border-dashed border-amber-300 flex items-center justify-center shrink-0"
-                        title={transferSignals.summary}
-                      >
+                      <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
                         <ArrowLeftRight className="w-4 h-4 text-amber-600" />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-xs font-semibold text-slate-900 truncate">{label}</p>
-                        <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400">
-                          <AccountingStrip signals={transferSignals} />
-                          <span>·</span>
+                        <span className="text-xs font-semibold text-slate-900 truncate block">{label}</span>
+                        <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 border border-slate-200/80">
+                            <Receipt className={cn('w-3 h-3', iconStateClass('neutral'))} />
+                            <Banknote className={cn('w-3 h-3', iconStateClass(cashState))} />
+                            <CreditCard className={cn('w-3 h-3', iconStateClass(bankState))} />
+                          </span>
                           <span>{formatRelativeTime(t.timestamp)}</span>
-                          {!t.isSynced && (
-                            <span title="Offline" className="inline-flex">
-                              <Clock className="w-3 h-3 text-slate-400" />
-                            </span>
-                          )}
+                          {!t.isSynced && <Clock className="w-3 h-3 text-slate-400" />}
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
                       <p className="text-sm font-bold font-mono text-amber-700 tracking-tight">
                         {format(t.amountALL)}
                       </p>
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteTransfer(t.id, e)}
-                        className="p-1.5 rounded-lg text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
-                        title="Delete transfer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center justify-center w-[26px]">
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteTransfer(t.id, e)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                          title="Delete transfer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -477,17 +446,12 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 vendorType: expense.vendorType,
                 foodType: expense.foodType,
               });
-              const expCurrency = (expense.currency || 'ALL').toUpperCase();
-              const isForeignCurrency = expCurrency !== 'ALL';
-              const showNativePrimary =
-                item.isConvex && expCurrency !== activeCurrency.toUpperCase();
-
+              const isForeignCurrency = expense.currency !== 'ALL';
               const kind = primaryKind(expense);
               const noWallet = Boolean(expense.walletNeutral);
+              const isCash = expense.paidWith === 'Cash';
               const spent = isSpent(expense);
               const isIn = expense.amount < 0;
-              const signals = getExpenseSignals(expense, kind, spent);
-
               const moneyKinds: PrimaryKind[] = [
                 'lent',
                 'borrowed',
@@ -497,20 +461,27 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                 'reconciliation',
               ];
 
+              const receiptState: AccountingState =
+                kind === 'income' || budgetImpactOf(expense) < 0
+                  ? 'inflow'
+                  : spent
+                    ? 'outflow'
+                    : 'neutral';
+
+              const cashState: AccountingState =
+                noWallet || !isCash ? 'neutral' : isIn ? 'inflow' : 'outflow';
+
+              const bankState: AccountingState =
+                noWallet || isCash ? 'neutral' : isIn ? 'inflow' : 'outflow';
+
               let displayAmount: string;
               let amountColor: string;
-              if (showNativePrimary) {
-                displayAmount = formatRawCurrency(
-                  Math.abs(expense.amount),
-                  expCurrency as ExpenseRecord['currency']
-                );
-                amountColor = 'text-slate-900';
-              } else if (noWallet) {
+              if (noWallet) {
                 displayAmount = format(Math.abs(expense.amountInALL));
-                amountColor = 'text-slate-600';
+                amountColor = 'text-slate-500';
               } else if (moneyKinds.includes(kind)) {
                 displayAmount = `${isIn ? '+' : '−'}${format(Math.abs(expense.amountInALL))}`;
-                amountColor = isIn ? 'text-emerald-600' : 'text-indigo-600';
+                amountColor = isIn ? 'text-emerald-600' : 'text-rose-600';
               } else if (isIn) {
                 displayAmount = `+${format(Math.abs(expense.amountInALL))}`;
                 amountColor = 'text-emerald-600';
@@ -520,85 +491,75 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
               }
 
               let icon: React.ReactNode;
-              let tile = 'bg-slate-50 border-slate-200';
+              let tile = 'bg-slate-100 border-slate-200';
               if (item.isConvex) {
-                icon = CATEGORY_ICONS[canonicalCategory] || <Users className="w-4 h-4 text-emerald-600" />;
-                tile = 'bg-emerald-50/60 border-emerald-200';
+                icon = <Users className="w-4 h-4 text-emerald-600" />;
+                tile = 'bg-emerald-50 border-emerald-200';
               } else if (kind === 'reconciliation') {
                 icon = <Scale className="w-4 h-4 text-amber-600" />;
-                tile = 'bg-amber-50/70 border-dashed border-amber-300';
+                tile = 'bg-amber-50 border-amber-200';
+              } else if (kind === 'gift') {
+                icon = <Gift className="w-4 h-4 text-rose-600" />;
+                tile = 'bg-rose-50 border-rose-200';
               } else if (kind === 'lent' || kind === 'borrowed') {
-                icon = <HandCoins className="w-4 h-4 text-indigo-600" />;
-                tile = 'bg-indigo-50/70 border-dashed border-indigo-300';
+                icon = <HandCoins className="w-4 h-4 text-indigo-500" />;
+                tile = 'bg-indigo-50 border-indigo-200';
               } else if (kind === 'repaid_to_me' || kind === 'i_repaid') {
                 icon = <HandCoins className="w-4 h-4 text-emerald-600" />;
-                tile = 'bg-emerald-50/70 border-dashed border-emerald-300';
+                tile = 'bg-emerald-50 border-emerald-200';
               } else if (kind === 'offset') {
                 icon = <HandCoins className="w-4 h-4 text-slate-500" />;
-                tile = 'bg-slate-50 border-dashed border-slate-300';
+                tile = 'bg-slate-100 border-slate-200';
               } else if (kind === 'income') {
                 icon = <PlusCircle className="w-4 h-4 text-emerald-600" />;
                 tile = 'bg-emerald-50 border-emerald-200';
               } else {
                 icon = CATEGORY_ICONS[canonicalCategory] || <MoreHorizontal className="w-4 h-4 text-slate-700" />;
-                if (kind === 'gift') {
-                  tile = 'bg-rose-50/70 border-rose-200';
-                } else if (kind === 'big') {
-                  tile = 'bg-purple-50/70 border-purple-200';
-                } else if (noWallet) {
-                  tile = 'bg-indigo-50/50 border-indigo-200';
-                }
               }
 
               const showsBudgetShare =
                 expense.budgetAmountALL !== undefined &&
-                Math.abs(expense.budgetAmountALL - expense.amountInALL) >= 1;
+                Math.abs(expense.budgetAmountALL - expense.amountInALL) >= 1 &&
+                expense.budgetAmountALL > 0;
 
               return (
                 <div
                   key={expense.id}
                   onClick={() => !item.isConvex && handleRowClick(expense)}
-                  className={`flex items-center justify-between px-3 py-2.5 rounded-2xl bg-white transition-all border border-slate-200 shadow-sm ${
+                  className={`flex items-center justify-between p-3 rounded-2xl bg-white transition-all border border-slate-200 shadow-sm ${
                     !item.isConvex ? 'cursor-pointer hover:border-emerald-300 hover:shadow-md' : ''
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div
-                      className={cn(
-                        'w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border',
-                        tile
-                      )}
-                      title={`${canonicalCategory} · ${signals.summary}`}
-                    >
+                    <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border', tile)}>
                       {icon}
                     </div>
 
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
                         <span className="text-xs font-semibold text-slate-900 truncate">
                           {expense.itemName || (isIn ? 'Income' : canonicalCategory)}
                         </span>
                         {item.isConvex && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-700 font-bold shrink-0">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold shrink-0">
                             {item.groupName || 'Divvy'}
                           </span>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400 truncate">
-                        <AccountingStrip signals={signals} />
-                        <span>·</span>
+                      <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 border border-slate-200/80">
+                          <Receipt className={cn('w-3 h-3', iconStateClass(receiptState))} />
+                          <Banknote className={cn('w-3 h-3', iconStateClass(cashState))} />
+                          <CreditCard className={cn('w-3 h-3', iconStateClass(bankState))} />
+                        </span>
                         <span>{formatRelativeTime(expense.timestamp)}</span>
-                        {!expense.isSynced && (
-                          <span title="Offline" className="inline-flex shrink-0">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                          </span>
-                        )}
+                        {!expense.isSynced && <Clock className="w-3 h-3 text-slate-400" />}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
                     <div className="text-right">
                       <p className={cn('text-sm font-bold font-mono tracking-tight', amountColor)}>
                         {displayAmount}
@@ -608,31 +569,24 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                           your share {format(expense.budgetAmountALL as number)}
                         </p>
                       )}
-                      {showNativePrimary ? (
+                      {isForeignCurrency && (
                         <p className="text-[10px] font-mono text-emerald-600 font-medium">
-                          ≈ {format(expense.amountInALL)}
+                          ≈ {format(Math.abs(expense.amountInALL))}
                         </p>
-                      ) : (
-                        isForeignCurrency && (
-                          <p className="text-[10px] font-mono text-emerald-600 font-medium">
-                            {formatRawCurrency(
-                              Math.abs(expense.amount),
-                              expCurrency as ExpenseRecord['currency']
-                            )}
-                          </p>
-                        )
                       )}
                     </div>
 
                     {!item.isConvex && (
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteExpense(expense.id, e)}
-                        className="p-1.5 rounded-lg text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
-                        title="Delete record"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center justify-center w-[26px]">
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteExpense(expense.id, e)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                          title="Delete record"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
