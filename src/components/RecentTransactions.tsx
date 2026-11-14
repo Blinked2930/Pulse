@@ -129,11 +129,7 @@ function primaryKind(e: ExpenseRecord): PrimaryKind {
     return 'i_repaid';
   }
 
-  if (
-    e.isForgiveness ||
-    lowerName.includes('gift to') ||
-    lowerName.includes('forgiven to')
-  ) {
+  if (e.isForgiveness || lowerName.includes('gift to') || lowerName.includes('forgiven to')) {
     return 'gift';
   }
   if (e.amount < 0) return 'income';
@@ -143,15 +139,15 @@ function primaryKind(e: ExpenseRecord): PrimaryKind {
 const SPENT_BUCKETS = new Set(['regular', 'noWalletSpending', 'forgiveness', 'travel', 'big']);
 
 function isSpent(e: ExpenseRecord): boolean {
-  return e.amount > 0 && SPENT_BUCKETS.has(classifyExpense(e));
+  return e.amount > 0 && SPENT_BUCKETS.has(classifyExpense(e)) && budgetImpactOf(e) > 0;
 }
 
 type FlowPolarity = 'positive' | 'negative' | 'neutral';
 
 interface AccountingSignals {
-  expense: FlowPolarity;
-  cash: FlowPolarity;
-  bank: FlowPolarity;
+  expense: FlowPolarity; // green = income/refund, red = expense incurred, gray = neutral
+  cash: FlowPolarity;    // green = cash in, red = cash out, gray = neutral
+  bank: FlowPolarity;    // green = bank in, red = bank out, gray = neutral
   summary: string;
 }
 
@@ -159,11 +155,17 @@ function getExpenseSignals(e: ExpenseRecord, kind: PrimaryKind, spent: boolean):
   const noWallet = Boolean(e.walletNeutral);
   const isCash = e.paidWith === 'Cash';
   const isInflow = e.amount < 0;
+  const impact = budgetImpactOf(e);
+  const bucket = classifyExpense(e);
 
   let expensePolarity: FlowPolarity = 'neutral';
-  if (spent) {
+  if (spent && impact > 0) {
     expensePolarity = 'negative';
-  } else if (kind === 'income' || (isInflow && !e.debtRelated && !e.isDebtOrigin)) {
+  } else if (
+    kind === 'income' ||
+    (isInflow && !e.debtRelated && !e.isDebtOrigin && kind !== 'reconciliation' && kind !== 'offset') ||
+    (SPENT_BUCKETS.has(bucket) && impact < 0)
+  ) {
     expensePolarity = 'positive';
   }
 
@@ -181,7 +183,7 @@ function getExpenseSignals(e: ExpenseRecord, kind: PrimaryKind, spent: boolean):
   const label = (p: FlowPolarity, pos: string, neg: string) =>
     p === 'positive' ? pos : p === 'negative' ? neg : 'neutral';
 
-  const summary = `Expense: ${label(expensePolarity, '+income', '−expense')} · Cash: ${label(
+  const summary = `Expenses: ${label(expensePolarity, '+positive', '−negative')} · Cash: ${label(
     cashPolarity,
     '+in',
     '−out'
@@ -325,28 +327,26 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
       .filter((t) => !t.deleted)
       .map((t) => ({ kind: 'transfer' as const, record: t, timestamp: t.timestamp }));
 
-    const remoteExpenses: MergedItem[] = convexActivity
-      .filter((a: any) => a.type !== 'settlement' && a.syncToPulse !== false)
-      .map((a: any) => ({
-        kind: 'expense' as const,
-        isConvex: true,
-        groupName: a.groupName,
+    const remoteExpenses: MergedItem[] = convexActivity.map((a: any) => ({
+      kind: 'expense' as const,
+      isConvex: true,
+      groupName: a.groupName,
+      timestamp: new Date(a.timestamp).toISOString(),
+      record: {
+        id: a.id || a._id,
+        amount: a.amount,
+        amountInALL: a.amountInALL ?? a.amount,
+        budgetAmountALL: typeof a.myShareALL === 'number' ? a.myShareALL : undefined,
+        currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
+        category: normalizeCategory(a.category),
+        itemName: a.title || `${a.groupName}`,
+        paidWith: a.paidWith || 'Card',
+        walletNeutral: a.youPaid === false,
+        isBigExpense: Boolean(a.isBigExpense),
         timestamp: new Date(a.timestamp).toISOString(),
-        record: {
-          id: a.id || a._id,
-          amount: a.amount,
-          amountInALL: a.amountInALL ?? a.amount,
-          budgetAmountALL: typeof a.myShareALL === 'number' ? a.myShareALL : undefined,
-          currency: (a.currency || 'ALL') as ExpenseRecord['currency'],
-          category: normalizeCategory(a.category),
-          itemName: `${a.groupName}: ${a.title}`,
-          paidWith: a.paidWith || 'Card',
-          walletNeutral: a.youPaid === false,
-          isBigExpense: Boolean(a.isBigExpense),
-          timestamp: new Date(a.timestamp).toISOString(),
-          isSynced: true,
-        } as ExpenseRecord,
-      }));
+        isSynced: true,
+      } as ExpenseRecord,
+    }));
 
     return [...localExpenses, ...localTransfers, ...remoteExpenses].sort((a, b) =>
       a.timestamp < b.timestamp ? 1 : -1
@@ -425,8 +425,8 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                   cash: isBankToCash ? 'positive' : 'negative',
                   bank: isBankToCash ? 'negative' : 'positive',
                   summary: isBankToCash
-                    ? 'Expense: neutral · Cash: +in · Bank: −out'
-                    : 'Expense: neutral · Cash: −out · Bank: +in',
+                    ? 'Expenses: neutral · Cash: +in · Bank: −out'
+                    : 'Expenses: neutral · Cash: −out · Bank: +in',
                 };
 
                 return (
@@ -437,7 +437,7 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                     <div className="flex items-center gap-3 min-w-0">
                       <div
                         className="w-9 h-9 rounded-xl bg-amber-50/70 border border-dashed border-amber-300 flex items-center justify-center shrink-0"
-                        title="Not an expense · Internal wallet transfer"
+                        title={transferSignals.summary}
                       >
                         <ArrowLeftRight className="w-4 h-4 text-amber-600" />
                       </div>
@@ -585,10 +585,10 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400">
+                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-400 truncate">
                         <AccountingStrip signals={signals} />
                         <span>·</span>
-                        <span className="shrink-0">{formatRelativeTime(expense.timestamp)}</span>
+                        <span>{formatRelativeTime(expense.timestamp)}</span>
                         {!expense.isSynced && (
                           <span title="Offline" className="inline-flex shrink-0">
                             <Clock className="w-3 h-3 text-slate-400" />
