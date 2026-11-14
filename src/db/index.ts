@@ -15,16 +15,17 @@ import type {
   VendorType,
 } from '../types';
 import { convertToALL } from '../utils/currency';
+import { normalizeCategory } from '../utils/categoryConfig';
 import { exportToCSV as generateCSV, exportToJSON as generateJSON } from '../utils/export';
 
-export class PulseDatabase extends Dexie {
+export class LekFlowDatabase extends Dexie {
   expenses!: Table<ExpenseRecord, string>;
   budgetCycles!: Table<BudgetCycle, string>;
   transfers!: Table<TransferRecord, string>;
   debts!: Table<DebtRecord, string>;
 
   constructor() {
-    super('PulseDB');
+    super('LekFlowDB');
     this.version(1).stores({
       expenses: 'id, timestamp, category, vendorType, isSynced, amountInALL',
       budgetCycles: 'id, startDate, targetEndDate',
@@ -47,7 +48,7 @@ export class PulseDatabase extends Dexie {
   }
 }
 
-export const db = new PulseDatabase();
+export const db = new LekFlowDatabase();
 
 export interface RemoteExpense {
   _id?: string;
@@ -118,14 +119,6 @@ export interface RemoteDebt {
   deleted?: boolean;
 }
 
-function normalizeCategory(catStr?: string): Category {
-  if (!catStr) return 'Other';
-  const match = (['Food', 'Utilities', 'Transport', 'Social', 'Travel', 'Accommodation', 'Entertainment', 'Other'] as Category[]).find(
-    (c) => c.toLowerCase() === catStr.toLowerCase() || catStr.toLowerCase().includes(c.toLowerCase())
-  );
-  return match ?? 'Other';
-}
-
 // ---------- Expense helpers ----------
 
 export async function addExpense(
@@ -147,7 +140,10 @@ export async function addExpense(
   const record: ExpenseRecord = {
     ...expenseData,
     id,
-    category: normalizeCategory(expenseData.category),
+    category: normalizeCategory(expenseData.category, {
+      vendorType: expenseData.vendorType,
+      foodType: expenseData.foodType,
+    }),
     amountInALL,
     subcategory: expenseData.subcategory,
     timestamp: expenseData.timestamp || now,
@@ -172,12 +168,9 @@ export async function getExpenses(limit?: number): Promise<ExpenseRecord[]> {
 
 export async function deleteExpense(id: string): Promise<void> {
   const expense = await db.expenses.get(id);
-  if (!expense || expense.deleted) return;
+  if (!expense) return;
 
-  const now = new Date().toISOString();
-
-  // If this expense is the origin creation of a debt, delete the debt record
-  if (expense.debtId && (expense.isDebtOrigin || expense.id === expense.debtId)) {
+  if (expense.debtId) {
     await deleteDebt(expense.debtId);
     return;
   }
@@ -189,26 +182,10 @@ export async function deleteExpense(id: string): Promise<void> {
     await deleteDebt(d.id);
   }
 
-  // If this expense is a settlement / offset / repayment counter-entry linked to a debt, restore balance
-  if (expense.debtId) {
-    const debt = await db.debts.get(expense.debtId);
-    if (debt && !debt.deleted) {
-      const settledAmt = Math.abs(expense.amountInALL || expense.amount);
-      const newRemaining = Math.min(debt.amountALL, debt.remainingALL + settledAmt);
-      await db.debts.update(debt.id, {
-        remainingALL: newRemaining,
-        status: 'open',
-        resolvedAt: undefined,
-        isSynced: false,
-        updatedAt: now,
-      });
-    }
-  }
-
   await db.expenses.update(id, {
     deleted: true,
     isSynced: false,
-    updatedAt: now,
+    updatedAt: new Date().toISOString(),
   });
 }
 
@@ -229,7 +206,12 @@ export async function updateExpense(
 
   await db.expenses.update(id, {
     ...updates,
-    category: updates.category ? normalizeCategory(updates.category) : existing.category,
+    category: updates.category
+      ? normalizeCategory(updates.category, {
+          vendorType: updates.vendorType ?? existing.vendorType,
+          foodType: updates.foodType ?? existing.foodType,
+        })
+      : existing.category,
     amountInALL,
     updatedAt: new Date().toISOString(),
     isSynced: false,
@@ -278,7 +260,10 @@ export async function applyRemoteExpenses(remote: RemoteExpense[]): Promise<void
         amount: r.amount,
         currency: r.currency,
         amountInALL: r.amountInALL,
-        category: normalizeCategory(r.category),
+        category: normalizeCategory(r.category, {
+          vendorType: r.vendorType as VendorType | undefined,
+          foodType: r.foodType as FoodType | undefined,
+        }),
         subcategory: r.subcategory,
         vendorType: r.vendorType as VendorType | undefined,
         foodType: r.foodType as FoodType | undefined,
@@ -420,11 +405,6 @@ function normalizeKey(name: string): string {
   return name.trim().toLowerCase();
 }
 
-/**
- * Low-level helper: applies a settlement-style expense against a debt record
- * and adjusts `remainingALL`. `deltaRemaining` is the signed change to apply
- * to `remainingALL` (negative = pay down, positive = grow debt).
- */
 async function applyDebtDelta(
   debt: DebtRecord,
   expense: Omit<ExpenseRecord, 'id' | 'timestamp' | 'isSynced' | 'amountInALL' | 'currency' | 'category'> & {
@@ -619,10 +599,6 @@ export async function hasLinkedDebt(expenseId: string, debtId?: string): Promise
   return count > 0;
 }
 
-/**
- * Real cash/bank settlement — money actually moved through the wallet.
- * Reduces `remainingALL` toward zero and logs an expense entry for root feed history.
- */
 export async function settleDebtCash(
   debtId: string,
   amountALL: number,
@@ -664,9 +640,6 @@ export async function settleDebtCash(
   });
 }
 
-/**
- * Non-cash offset — no wallet movement.
- */
 export async function settleDebtOffset(
   debtId: string,
   amountALL: number,
@@ -703,9 +676,6 @@ export async function settleDebtOffset(
   );
 }
 
-/**
- * Backwards-compatible wrapper for old callers. Always pays the debt down.
- */
 export async function settleDebtNonCash(
   debtId: string,
   amountALL: number,
