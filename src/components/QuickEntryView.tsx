@@ -739,6 +739,7 @@ export const QuickEntryView: React.FC = () => {
               paidWith: payMethod as PaymentSource,
               budgetAmountALL: myShareALL,
               debtId: debt.id,
+              isDebtOrigin: true,
               timestamp,
             });
 

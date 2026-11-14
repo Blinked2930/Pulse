@@ -1001,30 +1001,40 @@ export const DebtsPanel: React.FC<DebtsPanelProps> = ({ isOpen, onClose, initial
                 const currentDirection =
                   directionMap[g.key] ?? (net < 0 ? 'outflow' : 'inflow');
 
-                // Build unified feed items for this counterparty (both DebtRecords and linked ExpenseRecords)
-                const personDebtIds = new Set([
-                  ...g.openDebts.map((d) => d.id),
-                  ...g.resolvedDebts.map((d) => d.id),
-                ]);
+                // Build unified feed items for this counterparty (both DebtRecords and linked counter-entries)
+                const allPersonDebts = [...g.openDebts, ...g.resolvedDebts];
+                const personDebtIds = new Set(allPersonDebts.map((d) => d.id));
+                const personSourceExpenseIds = new Set(
+                  allPersonDebts
+                    .map((d) => d.sourceExpenseId)
+                    .filter((id): id is string => Boolean(id))
+                );
 
                 const matchingExpenses = expenses.filter((e) => {
                   if (e.deleted || e.isDebtOrigin) return false;
-                  if (e.debtId && personDebtIds.has(e.debtId)) return true;
+                  if (personSourceExpenseIds.has(e.id)) return false;
+
+                  const itemLower = (e.itemName || '').trim().toLowerCase();
+                  if (itemLower.startsWith('bought by ')) return false;
+
+                  const isCounterEntry =
+                    Boolean(e.debtRelated) ||
+                    Boolean(e.walletNeutral) ||
+                    Boolean(e.isForgiveness) ||
+                    (e.category as string) === 'Offset' ||
+                    itemLower.includes('offset') ||
+                    itemLower.includes('repaid') ||
+                    itemLower.includes('repayment') ||
+                    itemLower.includes('payment to') ||
+                    itemLower.includes('forgiven');
+
+                  if (e.debtId && personDebtIds.has(e.debtId)) {
+                    return isCounterEntry;
+                  }
 
                   if (e.itemName) {
-                    const itemLower = e.itemName.toLowerCase();
                     const nameLower = g.name.toLowerCase();
-                    const isDebtRelated =
-                      e.debtRelated ||
-                      e.walletNeutral ||
-                      e.isForgiveness ||
-                      (e.category as string) === 'Offset' ||
-                      itemLower.includes('offset') ||
-                      itemLower.includes('repaid') ||
-                      itemLower.includes('payment') ||
-                      itemLower.includes('forgiven');
-
-                    if (isDebtRelated && itemLower.includes(nameLower)) {
+                    if (isCounterEntry && itemLower.includes(nameLower)) {
                       return true;
                     }
                   }
