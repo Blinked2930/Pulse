@@ -85,6 +85,14 @@ export const EARMARKS_INSIDE_WALLET = true;
 export interface DivvySnapshot {
     receivablesALL: number;
     payablesALL: number;
+    walletDeltaALL?: number;
+    walletCardDeltaALL?: number;
+    walletCashDeltaALL?: number;
+    regularBudgetSpendALL?: number;
+    bigExpenseSpendALL?: number;
+    travelSpendALL?: number;
+    virtualExpenses?: ExpenseRecord[];
+    rollup?: unknown;
 }
 
 export const EMPTY_DIVVY_SNAPSHOT: DivvySnapshot = {
@@ -224,10 +232,12 @@ export function computeBudgetStats(
     let cashDelta = 0;
     let cardDelta = 0;
 
-    for (const e of expenses) {
-        if (e.deleted) continue;
+    const localExpenseIds = new Set<string>();
+
+    const accumulateExpense = (e: ExpenseRecord) => {
+        if (e.deleted) return;
         const whenMs = new Date(e.timestamp).getTime();
-        if (whenMs < startMs) continue;
+        if (whenMs < startMs) return;
 
         if (!e.walletNeutral) {
             const amt = e.amountInALL;
@@ -266,6 +276,28 @@ export function computeBudgetStats(
                 else consumedBeforeToday += budgetImpact;
                 break;
         }
+    };
+
+    for (const e of expenses) {
+        if (!e.deleted && e.id) localExpenseIds.add(e.id);
+        accumulateExpense(e);
+    }
+
+    // Include Divvy personal shares (daily budget, big expenses, and travel)
+    if (Array.isArray(divvy.virtualExpenses)) {
+        for (const ve of divvy.virtualExpenses) {
+            const rawDivvyId = ve.id.startsWith('divvy_') ? ve.id.slice(6) : ve.id;
+            if (localExpenseIds.has(ve.id) || localExpenseIds.has(rawDivvyId)) continue;
+            accumulateExpense(ve);
+        }
+    } else {
+        const divvyRegular = divvy.regularBudgetSpendALL ?? 0;
+        const divvyBig = divvy.bigExpenseSpendALL ?? 0;
+        const divvyTravel = divvy.travelSpendALL ?? 0;
+        consumed += divvyRegular;
+        consumedBeforeToday += divvyRegular;
+        bigExpenseSpent += divvyBig;
+        dreamsSpent += divvyTravel;
     }
 
     for (const t of transfers) {
@@ -281,9 +313,13 @@ export function computeBudgetStats(
         }
     }
 
+    const divvyCardDelta = divvy.walletCardDeltaALL ?? divvy.walletDeltaALL ?? 0;
+    const divvyCashDelta = divvy.walletCashDeltaALL ?? 0;
+
     const startingCash = cycle.startingCashALL ?? 0;
-    const estimatedBankBalance = cycle.startingRaiffeisenBalanceALL + cycle.stipendAmountALL + cardDelta;
-    const estimatedCashBalance = startingCash + cashDelta;
+    const estimatedBankBalance =
+        cycle.startingRaiffeisenBalanceALL + cycle.stipendAmountALL + cardDelta + divvyCardDelta;
+    const estimatedCashBalance = startingCash + cashDelta + divvyCashDelta;
 
     // Aux accounts count as part of the everyday pool.
     const auxAccountsTotal = totalAuxAccountsALL(cycle.customAccounts);

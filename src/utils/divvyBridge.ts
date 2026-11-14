@@ -143,8 +143,12 @@ function normalizeSettlementAmountALL(
   const cur = (set.currency || 'ALL').trim().toUpperCase();
   if (cur === 'ALL') return set.amountALL;
   const rate = rates[cur];
-  if (rate && rate !== 1 && set.amount === undefined) {
-    return Math.round(set.amountALL * rate * 100) / 100;
+  if (
+    rate &&
+    rate !== 1 &&
+    (set.amount === undefined || Math.abs(set.amountALL - set.amount) < 0.001)
+  ) {
+    return Math.round((set.amount ?? set.amountALL) * rate * 100) / 100;
   }
   return set.amountALL;
 }
@@ -169,12 +173,13 @@ export function findSelfMember(
   const candidateNames = displayNames
     .map((n) => normalizeName(n ?? ''))
     .filter((n) => n.length > 0);
-  if (candidateNames.length === 0) return null;
-
-  for (const m of members) {
-    if (candidateNames.includes(normalizeName(m.name))) return m;
+  if (candidateNames.length > 0) {
+    for (const m of members) {
+      if (candidateNames.includes(normalizeName(m.name))) return m;
+    }
   }
-  return null;
+  const byAnon = members.find((m) => !m.userId || m.userId === 'anonymous');
+  return byAnon ?? null;
 }
 
 interface RollupInput {
